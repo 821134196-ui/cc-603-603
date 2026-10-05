@@ -1,0 +1,145 @@
+// 城市地铁闸机故障票务补登系统 —— 数据模型
+// 两类工单：FaultReport（维修工单）与 TicketCase（票务工单）互相独立、分别结案。
+// 注：Prisma 的 SQLite 连接器不支持 enum，状态一律用 String，取值见 src/common/status.ts。
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- 设备 ----------
+
+model Gate {
+  id          String        @id @default(cuid())
+  code        String        @unique // 闸机编号，如 RM-A01
+  station     String // 站点
+  name        String // 闸机名称/位置
+  status      String        @default("NORMAL") // NORMAL | FAULT
+  faultReports FaultReport[]
+  createdAt   DateTime      @default(now())
+}
+
+// ---------- 维修工单 ----------
+
+model FaultReport {
+  id          String      @id @default(cuid())
+  gate        Gate        @relation(fields: [gateId], references: [id])
+  gateId      String
+  station     String
+  occurredAt  DateTime // 故障发生时间（站务员登记）
+  description String // 故障描述
+  stationAgent String // 登记站务员
+  status      String      @default("ALERT") // ALERT | REPAIR_CLOSED
+  repairNote  String? // 维修处理记录
+  repairedBy  String? // 维修员
+  repairedAt  DateTime? // 维修确认完成时间
+  createdAt   DateTime    @default(now())
+
+  ticketCase  TicketCase?
+  logs        GateLog[]
+  trips       Trip[]
+
+  @@index([status])
+}
+
+// ---------- 票务工单（与维修工单 1:1，但独立结案） ----------
+
+model TicketCase {
+  id            String       @id @default(cuid())
+  faultReport   FaultReport  @relation(fields: [faultReportId], references: [id])
+  faultReportId String       @unique
+  status        String       @default("OPEN") // OPEN | CLOSED
+  closeNote     String?
+  closedBy      String?
+  closedAt      DateTime?
+  createdAt     DateTime     @default(now())
+}
+
+// ---------- 闸机日志（本地上传/模拟，带去重约束） ----------
+
+model GateLog {
+  id           String       @id @default(cuid())
+  // 同一段故障日志重复上传：logHash 唯一，数据库层保证只形成一次有效记录
+  logHash      String       @unique
+  gateCode     String
+  station      String // 刷卡站点
+  cardId       String // 票卡号
+  eventType    String // ENTRY | EXIT
+  eventTime    DateTime // 刷卡发生时间
+  receivedAt   DateTime     @default(now()) // 系统收到时间
+  source       String       @default("SIMULATED_UPLOAD") // 上传来源
+  batchNo      String?
+  // 晚到日志：必须复核后才参与行程处理
+  isLate       Boolean      @default(false)
+  reviewed     Boolean      @default(false)
+  reviewNote   String?
+
+  faultReport   FaultReport? @relation(fields: [faultReportId], references: [id])
+  faultReportId String?
+  // 若该日志作为某段行程的进站/出站记录被使用
+  entryOfTrip  Trip?         @relation("EntryLog")
+  exitOfTrip   Trip?         @relation("ExitLog")
+
+  @@index([faultReportId, cardId])
+  @@index([logHash])
+}
+
+// ---------- 行程（一次故障 + 一张卡 = 最多一段行程） ----------
+
+model Trip {
+  id            String        @id @default(cuid())
+  faultReport   FaultReport   @relation(fields: [faultReportId], references: [id])
+  faultReportId String
+  cardId        String
+  status        String        @default("MISSING") // MISSING | REGISTERED | REFUNDED
+
+  entryLog      GateLog?      @relation("EntryLog", fields: [entryLogId], references: [id])
+  entryLogId    String?       @unique
+  exitLog       GateLog?      @relation("ExitLog", fields: [exitLogId], references: [id])
+  exitLogId     String?       @unique
+  entryStation  String?
+  exitStation   String?
+  manualExitNote String? // 客服人工补登说明
+
+  correctFare   Int           @default(0) // 应收票价（分）
+  createdAt     DateTime      @default(now())
+  registeredAt  DateTime? // 补登时间
+  registeredBy  String?
+
+  receipt       PaymentReceipt?
+  refund        RefundRecord?
+
+  // 同一故障下同一张卡只允许一段行程：重复日志不可能生成两段相同行程
+  @@unique([faultReportId, cardId])
+}
+
+// ---------- 支付回执（本地模拟） ----------
+
+model PaymentReceipt {
+  id            String        @id @default(cuid())
+  receiptNo     String        @unique
+  trip          Trip          @relation(fields: [tripId], references: [id])
+  tripId        String        @unique // 一趟行程最多一张回执
+  amountCharged Int // 实收（分，故障时通常按最高票价扣收）
+  correctAmount Int // 应收（分）
+  paidAt        DateTime      @default(now())
+  status        String        @default("PAID") // PAID | REFUNDED
+  refund        RefundRecord?
+}
+
+// ---------- 退款记录（一趟行程最多退款一次：tripId 唯一） ----------
+
+model RefundRecord {
+  id          String   @id @default(cuid())
+  trip        Trip     @relation(fields: [tripId], references: [id])
+  tripId      String   @unique // 数据库层硬约束：每趟行程最多一条退款
+  receipt     PaymentReceipt @relation(fields: [receiptId], references: [id])
+  receiptId   String        @unique
+  amount      Int // 退还差价（分）
+  reason      String
+  operator    String // 客服
+  createdAt   DateTime @default(now())
+}

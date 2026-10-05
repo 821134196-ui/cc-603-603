@@ -1,0 +1,21 @@
+{
+  "name": "metro-gate-fault-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "城市地铁闸机故障票务补登系统 —— 维修工单与票务工单分别跟进、独立结案",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "install:all": "npm install",
+    "db:push": "npm run db:push --workspace backend",
+    "test": "npm run test --workspace backend",
+    "build": "npm run build --workspace backend && npm run build --workspace frontend",
+    "start": "node scripts/start.mjs",
+    "start:dev": "concurrently -n api,web -c blue,green \"npm run start:dev --workspace backend\" \"npm run dev --workspace frontend\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

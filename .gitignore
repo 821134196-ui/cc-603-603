@@ -13,3 +13,9 @@ build/
 轨迹/
 录屏/
 视频/
+
+# Prisma SQLite databases
+backend/prisma/*.db
+backend/prisma/*.db-journal
+backend/prisma/dev.db
+.DS_Store
