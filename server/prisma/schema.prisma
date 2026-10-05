@@ -1,0 +1,115 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 闸机设备。status 只能由维修工单确认后恢复 NORMAL —— 告警看板以此为准。
+model Gate {
+  id        String       @id @default(cuid())
+  code      String       @unique // 如 "G01"
+  name      String
+  station   String
+  status    String       @default("NORMAL") // NORMAL | FAULT
+  incidents Incident[]
+  logs      GateLog[]
+  trips     TripRecord[]
+}
+
+// 一次闸机故障事件。登记时同事务生成一张维修工单 + 一张票务工单，两者生命周期独立。
+model Incident {
+  id          String       @id @default(cuid())
+  gateId      String
+  gate        Gate         @relation(fields: [gateId], references: [id])
+  occurredAt  DateTime
+  reportedBy  String // 站务员
+  description String       @default("")
+  createdAt   DateTime     @default(now())
+  repairOrder RepairOrder?
+  ticketOrder TicketOrder?
+  trips       TripRecord[]
+}
+
+// 维修工单：PENDING -> IN_PROGRESS -> RESOLVED（维修确认）。
+// 只有 RESOLVED 才会把闸机从告警看板撤下；与票务工单互不影响。
+model RepairOrder {
+  id         String    @id @default(cuid())
+  incidentId String    @unique
+  incident   Incident  @relation(fields: [incidentId], references: [id])
+  status     String    @default("PENDING") // PENDING | IN_PROGRESS | RESOLVED
+  assignee   String    @default("")
+  note       String    @default("")
+  startedAt  DateTime?
+  resolvedAt DateTime?
+}
+
+// 票务工单：PENDING -> PROCESSING -> CLOSED。
+// 关闭前提：本故障关联行程无 NEEDS_REVIEW / MISSING_EXIT；关闭不影响维修工单与告警。
+model TicketOrder {
+  id         String    @id @default(cuid())
+  incidentId String    @unique
+  incident   Incident  @relation(fields: [incidentId], references: [id])
+  status     String    @default("PENDING") // PENDING | PROCESSING | CLOSED
+  handler    String    @default("")
+  note       String    @default("")
+  closedAt   DateTime?
+}
+
+// 闸机日志。contentHash 唯一：同一段日志重复上传只形成一次有效记录。
+model GateLog {
+  id          String      @id @default(cuid())
+  gateId      String
+  gate        Gate        @relation(fields: [gateId], references: [id])
+  contentHash String      @unique
+  recordCount Int
+  duplicated  Boolean     @default(false) // 该日志是否为重复上传（被幂等拦截的那次不建行，此字段标记首条之后无意义，仅保留扩展位）
+  uploadedAt  DateTime    @default(now())
+  trips       TripRecord[]
+}
+
+// 行程记录。dedupeKey 唯一：同一卡在同一站同一进站时间只生成一段行程。
+// 故障期间晚到的记录 late=true 且状态 NEEDS_REVIEW，须客服复核后才能补登。
+model TripRecord {
+  id           String    @id @default(cuid())
+  dedupeKey    String    @unique // cardId|entryStation|entryTime(ISO)
+  cardId       String
+  gateId       String
+  gate         Gate      @relation(fields: [gateId], references: [id])
+  entryStation String
+  entryTime    DateTime
+  exitStation  String?
+  exitTime     DateTime?
+  chargedFare  Int       @default(0) // 已扣费（分）；缺出站时按全程最高价扣
+  correctFare  Int? // 补登后核算的应收（分）
+  status       String    @default("NORMAL") // NORMAL | MISSING_EXIT | NEEDS_REVIEW | COMPLETED | REFUNDED
+  late         Boolean   @default(false)
+  incidentId   String?
+  incident     Incident? @relation(fields: [incidentId], references: [id])
+  logId        String?
+  log          GateLog?  @relation(fields: [logId], references: [id])
+  refund       Refund?
+}
+
+// 退款。tripId 唯一：一趟行程最多退款一次。
+model Refund {
+  id        String     @id @default(cuid())
+  tripId    String     @unique
+  trip      TripRecord @relation(fields: [tripId], references: [id])
+  amount    Int // 分
+  reason    String     @default("")
+  receiptNo String     @unique
+  createdAt DateTime   @default(now())
+}
+
+// 支付回执（本地模拟支付系统）：扣费与退款各生成一张。
+model PaymentReceipt {
+  id        String   @id @default(cuid())
+  receiptNo String   @unique
+  cardId    String
+  amount    Int // 分
+  kind      String // CHARGE | REFUND
+  createdAt DateTime @default(now())
+}

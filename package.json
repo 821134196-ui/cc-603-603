@@ -1,0 +1,19 @@
+{
+  "name": "metro-gate-fault-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "城市地铁闸机故障票务补登系统（NestJS + React + Prisma/SQLite）",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "setup": "npm run prisma:setup --workspace=server",
+    "dev": "concurrently -n server,web -c blue,green \"npm run start:dev --workspace=server\" \"npm run dev --workspace=web\"",
+    "start": "npm install && npm run setup && npm run dev",
+    "test": "npm run test --workspace=server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
